@@ -1,0 +1,12 @@
+name: multi_factor_cfa2_-_dynamic8
+title: Multi Factor CFA2 - dynamic
+username: melissagwolf
+account: melissagwolf
+server: www.dynamicfit.app
+hostUrl: https://www.dynamicfit.app/__api__
+appId: 24
+bundleId: 107
+url: https://www.dynamicfit.app/content/24/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

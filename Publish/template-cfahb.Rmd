@@ -1,0 +1,89 @@
+---
+title: "Dynamic Fit Index Cutoffs"
+author: "Created by Daniel McNeish and Melissa G Wolf"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+### Your Model:
+
+Single level multi-factor CFA with continuous outcomes
+
+```{r}
+plot(model_check)
+```
+
+`r if (input$input_type == 2){
+  paste("Dataset: ",(dataset()$name))
+}`
+
+`r if (input$input_type == 2){
+  paste("Model: ")
+}
+`
+
+```{r}
+if (input$input_type == 2){
+  cat(glue::glue("{input_text}"))
+}
+
+```
+
+`r if (input$input_type == 2){
+  df <- read.csv(dataset()$datapath)
+  paste("Sample Size: ",nrow(df))
+}`
+
+`r if (input$input_type == 3){
+  paste("Sample Size: ",n())
+}`
+
+`r if (input$input_type == 3){
+  paste("Model:")
+}`
+
+```{r}
+if (input$input_type == 3){
+  cat(glue::glue("{input_text}"))
+}
+
+```
+
+### Your DFI Cutoffs:
+
+```{r, results='asis'}
+kable(cutoffs)
+```
+
+**Levels**: 
+
+The number of levels depends on the number of factors in your model. You will see a level of misspecification severity for each *F*-1 factor (where *F* is the number of factors), in accordance with the procedure established by Hu & Bentler in 1999.
+
+Increasing levels correspond to increasing degrees of misspecification. Level 1 = one omitted cross-loading, level 2 = two omitted crossloadings, etc.
+
+Your area(s) of concern may differ from the misspecifications simulated here. You should also consult the residual correlation matrix for local areas of strain, check out the modification indices, and present other types of evidence of validity (such as an evaluation of participants’ response processes).
+
+**Rows**: 
+
+Within each level, there are two rows.
+
+- The first row of the table represents the ideal cutoff values for that misspecification level. At this cutoff value, 95% of misspecified models will be correctly rejected, while only 5% of correctly specified models will be incorrectly rejected. This value is best equipped to distinguish between a well-fitting and misspecified model.
+
+- The second row of the table represents acceptable cutoff values for that misspecification level. At this cutoff value, 90% of misspecified models will be correctly rejected, while 10% of correctly specified models will be incorrectly rejected. If the first row says NONE, you should use this value instead. *This row will be blank if ideal cutoff values are available.*
+
+If you see the word NONE in both rows, that means that there are no dynamic fit index cutoff values for that fit index that will correctly reject a misspecified model 90% of the time while also correctly failing to reject a correctly specified model at least 10% of the time. Thus, this fit index cannot distinguish between well-fitting models and ill-fitting models for your model, for that level of misspecification.
+
+### Citation Recommendations:
+
+To cite DFI cutoffs:
+
+Wolf, M.G. & McNeish, D. (2022). dynamic: DFI cutoffs for latent variables models
+(version 1.1.0). [Software]. www.dynamicfit.app.
+
+McNeish, D. & Wolf, M.G. (2023). Dynamic fit index cutoffs for confirmatory factor
+analysis models. *Psychological Methods, 28* (1), 61-88.
