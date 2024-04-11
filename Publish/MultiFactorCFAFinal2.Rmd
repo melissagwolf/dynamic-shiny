@@ -67,7 +67,6 @@ fluidPage(theme = shinytheme("slate"),
           shinybusy::add_busy_bar(color = "#BECEE4"))
 
 library(shiny)
-?fluidPage()
 
 options(shiny.sanitize.errors = FALSE)
 ```

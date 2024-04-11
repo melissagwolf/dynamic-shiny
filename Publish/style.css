@@ -1,0 +1,19 @@
+body {
+  font-family: Palatino;
+}
+
+.shiny-output-error-validation {
+        color: #ff0000;
+      }
+
+.myimg {
+      border: 1;
+      max-width: 80%;
+      max-height: 40%;
+      overflow:scroll;
+    }
+    element.style {
+      width: 40%;
+      height: 40%;
+      overflow:scroll;
+    }

@@ -12,7 +12,6 @@ always_allow_html: yes
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 
-
 library(rmarkdown)
 library(lavaan)
 library(tidyverse)
@@ -33,14 +32,11 @@ library(devtools)
 devtools::install_github("melissagwolf/dynamic")
 library(dynamic)
 
-#List aesthetics first
+devtools::install_github("daattali/shinycssloaders")
+library(shinycssloaders)
 ```
 
 <style type="text/css">
-
-body {
-  font-family: Palatino;
-}
 
 .shiny-output-error-validation {
         color: #ff0000;
@@ -68,12 +64,8 @@ body {
 </script>
 
 ```{r design}
-fluidPage(theme = shinytheme("slate"),
-          shinybusy::add_busy_bar(color = "#BECEE4"))
-
-#library(shiny)
-
 options(shiny.sanitize.errors = FALSE)
+options(page.spinner.type = 5, page.spinner.color = "#7691b6")
 ```
 
 Sidebar {.sidebar data-width=400}
@@ -115,8 +107,12 @@ Y4 ~~ Y5",
   helpText("Please view the path diagram to make sure your model is correct."),
 
   tags$a(href = "#section-modelcheck",
-  shiny::actionButton("check", "Model Check")   # need a different button here for flow later
-       ))
+         # need a different button here for flow later
+         shiny::actionButton("check", "Model Check")),
+
+  style='padding-bottom:5px;'
+
+  )
 
 conditionalPanel(
   condition = "input.input_type == 3",
@@ -137,8 +133,12 @@ Y4 ~~ .301*Y5",
   helpText("Please view the path diagram to make sure your model is correct."),
 
   tags$a(href = "#section-modelcheck",
-  shiny::actionButton("check2", "Model Check")   # need a different button here for flow later
-       ))
+         # need a different button here for flow later
+         shiny::actionButton("check2", "Model Check")),
+  
+  style='padding-bottom:5px;'
+
+)
 
 conditionalPanel(
   condition = "input.check > 0 | input.check2 > 0",
@@ -149,10 +149,22 @@ conditionalPanel(
   tags$a(href = "#section-results",
        shiny::actionButton("go", "Submit")),
   
-  #downloadButton('download','Download DFI Cutoffs')
+  style='padding-bottom:15px;'
+  
 )
-
 ```
+
+```{r}
+# Scroll to "Submit" button after "Model Check" button is clicked
+observeEvent(input$check,{
+  shinyjs::delay(2, shinyjs::runjs("$('#go').get(0).scrollIntoView();"))
+})
+
+observeEvent(input$check2,{
+  shinyjs::delay(2, shinyjs::runjs("$('#go').get(0).scrollIntoView();"))
+})
+```
+
 
 ```{r rename}
 #Name inputs
@@ -174,15 +186,85 @@ model_loadings_mc <- eventReactive(input$check2,{input$model_syntax_loadings})
 ```
 
 ```{r}
+# Functions to check for errors
+
+# Check for general errors in model statement using lavaanify
+mod_statement_check <- function(mod){
+  tryCatch(
+    expr = {
+    lavaan::lavaanify(mod)
+    },
+    error = function(e){
+      stop(paste('There is a problem with your model statement: \n', e))
+    }
+  )
+}
+
+# Check for orthogonal factors
+orthogonal <- function(mod){
+  
+  factors <- lavaan::lavaanify(mod) |> 
+    dplyr::filter(op == "=~") |> 
+    dplyr::pull(lhs) |> 
+    base::unique()
+  
+  orth <- lavaan::lavaanify(mod) |> 
+    dplyr::filter(lhs != rhs) |> 
+    dplyr::filter(op != "=~") |> 
+    dplyr::filter(lhs %in% factors)
+  
+  return(nrow(orth))
+}
+
+# Check degrees of freedom for upload option
+defre_upload <- function(fit){
+  
+  #Number of freely estimated paths
+  paths <- base::max(lavaan::parTable(fit)$free)
+
+  #Number of unique values in input matrix
+  parms <- base::nrow(lavaan::lavInspect(fit,"std.lv")$theta)
+  tot.parms <- (parms*(1+parms))/2
+
+  #Subtract
+  return(tot.parms-paths)
+  
+}
+```
+
+```{r}
 # Check the model statement for data upload option
 
 model_check <- eventReactive(input$check,{
   
   if(type_mc()==2){
     
+    ext <- tools::file_ext(dataset_mc()$datapath)
+    shiny::validate(need(ext == "csv", "Please upload a csv file"))
+    
+    mod_statement_check(model_mc())
+    
+    shiny::validate(need(orthogonal(model_mc())>0,
+                         "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
+    
+    shiny::validate(need(dynamic:::number_factor(model_mc())>1, 
+                         "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    
     df <- read.csv(dataset_mc()$datapath)
-    fit <- lavaan::cfa(model = model_mc(), data = df)
+    
+    fit <- lavaan::cfa(model = model_mc(), 
+                       data = df,
+                       std.lv=TRUE)
+    
+    shiny::validate(need(defre_upload(fit)>1,
+                         "You do not have enough degrees of freedom. It is impossible to add misspecifications to a just identified model."))
+    
+    shinycssloaders::showPageSpinner(caption = "Creating path diagram")
+    
     mc <- semPlot::semPaths(fit)
+    
+    shinycssloaders::hidePageSpinner()
+    
     return(mc)
     
   }
@@ -192,13 +274,36 @@ model_check <- eventReactive(input$check,{
 
 model_check2 <- eventReactive(input$check2,{
   if(type_mc2()==3){
+    
+    shiny::validate(need(n_mc() > 0, "Please enter a sample size."))
+    
+    mod_statement_check(model_loadings_mc())
+    
+    shiny::validate(need(dynamic:::number_factor(model_loadings_mc())>1, 
+                         "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    
+    shiny::validate(need(dynamic:::unstandardized(model_loadings_mc())==0, 
+                         "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
+    
+        shiny::validate(need(dynamic:::defre(model_loadings_mc(),n_mc())>1,
+                         "You do not have enough degrees of freedom. It is impossible to add misspecifications to a just identified model."))
+    
+    shiny::validate(need(orthogonal(model_loadings_mc())>0,
+                         "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
+    
+    shinycssloaders::showPageSpinner(caption = "Creating path diagram")
+    
     dat <- simstandard::sim_standardized(m = model_loadings_mc(),
                                          n = n_mc(),
                                          latent=FALSE,
                                          errors=FALSE)
     mod <- simstandard::fixed2free(model_loadings_mc())
-    fit <- lavaan::cfa(model=mod,data=dat,std.lv=TRUE)
+    fit <- lavaan::cfa(model=mod,
+                       data=dat,
+                       std.lv=TRUE)
     mc <- semPlot::semPaths(fit)
+    shinycssloaders::hidePageSpinner()
+    
     return(mc)
   }
 })
@@ -211,19 +316,62 @@ package_results <- eventReactive(input$go,{
   
   if(type()==2){
     
+    ext <- tools::file_ext(dataset()$datapath)
+    shiny::validate(need(ext == "csv", "Please upload a csv file"))
+    
+    mod_statement_check(model())
+    
+    shiny::validate(need(dynamic:::number_factor(model())>1, 
+                         "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    
+    shiny::validate(need(orthogonal(model())>0,
+                         "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
+    
     df <- read.csv(dataset()$datapath)
-    fit <- lavaan::cfa(model = model(), data = df)
-    dynamic_fit <- dynamic::cfaHB(fit, reps = 20)
+    
+    fit <- lavaan::cfa(model = model(), 
+                       data = df, 
+                       std.lv = TRUE)
+    
+    shiny::validate(need(defre_upload(fit)>1,
+                         "You do not have enough degrees of freedom. It is impossible to add misspecifications to a just identified model."))
+    
+    shinycssloaders::showPageSpinner(caption = "Simulating cutoffs, please wait")
+    
+    dynamic_fit <- dynamic::cfaHB(fit,
+                                  reps = 250)
+    
+    shinycssloaders::hidePageSpinner()
+    
     return(dynamic_fit)
   }
   
   if(type()==3){
-
+    
+    shiny::validate(need(n() > 0, "Please enter a sample size."))
+    
+    mod_statement_check(model_loadings())
+    
+    shiny::validate(need(dynamic:::number_factor(model_loadings())>1, 
+                         "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    
+    shiny::validate(need(dynamic:::unstandardized(model_loadings())==0, 
+                         "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
+    
+    shiny::validate(need(dynamic:::defre(model_loadings(),n())>1,
+                         "You do not have enough degrees of freedom. It is impossible to add misspecifications to a just identified model."))
+    
+    shiny::validate(need(orthogonal(model_loadings())>0,
+                         "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
+  
+    shinycssloaders::showPageSpinner(caption = "Simulating cutoffs, please wait")
+    
     dynamic_fit <- dynamic::cfaHB(model = model_loadings(),
                                   n = n(),
                                   manual = T,
-                                  reps = 20)
-
+                                  reps = 250)
+    shinycssloaders::hidePageSpinner()
+    
     return(dynamic_fit)
   }
   
@@ -231,16 +379,18 @@ package_results <- eventReactive(input$go,{
 ```
 
 
-Multi-factor CFA
+Multi-factor CFA 
 =====================================  
 
 Row {.tabset}
 -----------------------------------------------------------------------
 
 ### Instructions
-
+<div>
 ```{r}
-renderUI({
+fluidPage(
+  style = "max-height: 85vh; overflow-y: auto; padding-bottom: 50px; overflow-x: auto;", 
+  renderUI({
   input_type <- input$input_type
   if (input_type == 1) {
     HTML(
@@ -275,9 +425,10 @@ renderUI({
          </ol>
          <br>
     See an example of a model statement and a corresponding path diagram below.
-    <div><img src = "Example3.png"></div>')
+    <br>
+    ')
   } else if (input_type == 3){
-    text <- HTML('
+    HTML('
     <div style="font-weight: bold;">How to enter your model statement manually</div>
     <br>
     <i>This is a good option if you do not have the data or do not want to upload it.</i>
@@ -296,65 +447,40 @@ renderUI({
     </ol>
     <br>
     See an example of a model statement and a corresponding path diagram below.
-    <div><img src = "Example3.png"></div>
+    <br>
+    <br>
     ')
-    img_tag <- htmltools::tags$img(src = "Example3.png")
-    combined_html <- htmltools::div(
-    img_tag,
-    text
-  )
-  
-  combined_html
-
   }
-})
+}),
 
-```
-
-<div>
-```{r progress1, eval=FALSE}
-#Just added because of a shiny bug with the action button
-#Ignore
-
-renderPlot({
-  
-    shiny::validate(
-    shiny::need(length(orthogonal(model()$datapath)) != 0,
-                       "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
-  
-    shiny::validate(
-    shiny::need(modelerror(model()$datapath) != 1,
-                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
-  
-    shiny::validate(
-    shiny::need(missing_plus(model()$datapath)==0,
-                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
-
-  shiny::validate(
-          shiny::need(tools::file_ext(model()$name) %in% 
-                 c('text','.txt','txt'),
-               "You must enter a text file (.txt)"))
-  
-  shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
-
-  shiny::validate(
-    shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
-  
-  shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
-                "It is impossible to add misspecifications to a just identified model."))
-  
-  shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-  
-  invisible(multi_df() %>% 
-    unlist())
-  
-}, width=1,height=1)
+renderImage({
+  input_type <- input$input_type
+  if (input$input_type==1){
+    return(list(
+      src = "no_image.png",
+      alt = ""
+    ))
+  }
+  else if (input$input_type == 2) { 
+    return(list(
+      src = "two_factor_upload.png",
+      contentType = "image/png",
+      alt = "",
+          width = 800,
+          height = 550
+      ))
+    } 
+  else if (input$input_type == 3) {
+    return(list(
+      src = "Example3.png",
+      filetype = "image/png",
+      alt = "",
+          width = 800,
+          height = 300
+      ))
+    }
+  }, deleteFile=FALSE)
+)
 ```
 </div>
 
@@ -364,7 +490,6 @@ Check the path diagram below to make sure your model was entered correctly. Afte
 
 ```{r}
 # Display the plot in the app
-
 renderPlot({
   
   if (input$input_type == 2) {
@@ -410,12 +535,15 @@ These are the dynamic model fit index cutoff values for your model:
 # Generate dynamic model fit index cutoffs and table in the app
 renderTable({
   
-  package_results()$cutoffs
+  # Just print SRMR, RMSEA, and CFI 
+  package_results()$cutoffs[1:3]
   
   },
     digits=3, align='c', rownames = TRUE, width="auto",
     bordered = TRUE) 
+```
 
+```{r}
 #########################
 ####### Download ########
 #########################
@@ -446,7 +574,7 @@ output$download <- downloadHandler(
       # Add the cutoffs
       e$cutoffs <- cutoffs_pdf()
       # Add the model image
-      e$model_check <- model_check_pdf()
+      e$model_check1 <- model_check_pdf()
       e$input_text <- model_pdf()
       # Render the document using template saved in same folder
       rmarkdown::render('template-cfahb.Rmd',
@@ -455,9 +583,7 @@ output$download <- downloadHandler(
                         envir = e)
     }
   )
-```
 
-```{r}
 # Auto download for those that toggled on the auto download button 
 # Need to use shinyjs::delay()
 observeEvent(input$go,{
@@ -496,69 +622,47 @@ If you see the word NONE in both rows, that means that there are no dynamic fit 
 A comparison of the fit index distributions for the "true" empirical model and the "misspecified" empirical model, for each level.  The dashed line represents the ideal dynamic model fit cutoff value for the user's empirical model.  The dotted line represents the commonly used cutoff values recommended by Hu & Bentler (1999).
 
 <div>
-```{r fit-plot, eval=FALSE}
+```{r fit-plot}
 #Generate corresponding distributions of fit indices for each model
 #This is a reactive, not a render table.  Save it as an object to call later
 #Necessary because of lists
 plotlist <- reactive({
   
-    shiny::validate(
-    shiny::need(length(orthogonal(model()$datapath)) != 0,
-                       "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
-  
-    shiny::validate(
-    shiny::need(modelerror(model()$datapath) != 1,
-                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
-  
-    shiny::validate(
-    shiny::need(missing_plus(model()$datapath)==0,
-                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
-
-  shiny::validate(
-          shiny::need(tools::file_ext(model()$name) %in% 
-                 c('text','.txt','txt'),
-               "You must enter a text file (.txt)"))
-  
-  shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
-
-  shiny::validate(
-    shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
-  
-  shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
-                "It is impossible to add misspecifications to a just identified model."))
-  
-  shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-  
   #Get the data ready to go
   results <- package_results()$data
   
-  #For each list element (misspecification) compute the cutoffs
-  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
-                                        RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                                        CFI_M=quantile(CFI_M, c(.95,.9))))
+  # Extract all of the levels
+  levels <- unique(sub(".*_","", names(results)))
   
-  #For the true model, compute the cutoffs (these will all be the same - just need in list form)
-  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
-                                            RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                                            CFI_T=quantile(CFI_T, c(.05,.1))))
+  # Create a list of dataframes for each level
+  dataframes <- list()
+
+  for(i in levels){
+    df_subset <- subset(results, select = endsWith(names(results),paste0("_",i)))
+    dataframes[i] <- list(df_subset)
+  }
   
-  #Select just those variables and rename columns to be the same
-  Misspec_dat <- purrr::map(results,~dplyr::select(.,SRMR_M:Type_M) %>% 
-                       `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
+  # Rename variables in dataframes
+  new_names <- c("SRMR", "RMSEA", "CFI")
   
-  #Select just those variables and rename columns to be the same
-  True_dat <- purrr::map(results,~dplyr::select(.,SRMR_T:Type_T) %>% 
-                    `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
+  dataframes_names <- lapply(dataframes, setNames, new_names)
+  
+  # Add column with type of model and separate into two lists
+  misspec_dat <- lapply(dataframes_names[-1], function(x) cbind(x, Model="Misspecified"))
+  true_dat <- lapply(dataframes_names[1], function(x) cbind(x, Model="True"))
+  
+  # Calculate cutoffs (these will all be the same - just need in list form)
+  misspec_sum <- purrr::map(misspec_dat,~dplyr::reframe(.,SRMR_M=quantile(SRMR, c(.05,.1)),
+                                                        RMSEA_M=quantile(RMSEA, c(.05,.1)),
+                                                        CFI_M=quantile(CFI, c(.95,.9))))
+  
+  true_sum <- purrr::map(true_dat,~dplyr::reframe(.,SRMR_T=quantile(SRMR, c(.95,.9)),
+                                                     RMSEA_T=quantile(RMSEA, c(.95,.9)),
+                                                     CFI_T=quantile(CFI, c(.05,.1))))
   
   #For each element in the list, bind the misspecified cutoffs to the true cutoffs
   #rbind doesn't work well with lists (needs do.call statement)
-  plot <- lapply(seq(length(Misspec_dat)),function(x) dplyr::bind_rows(Misspec_dat[x],True_dat[x]))
+  plot <- lapply(seq(length(misspec_dat)),function(x) dplyr::bind_rows(misspec_dat[[x]],true_dat[[1]]))
   
   #Plot SRMR. Need map2 and data=.x (can't remember why).
   SRMR_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
@@ -567,16 +671,16 @@ plotlist <- reactive({
                       scale_fill_manual(values=c("#E9798C","#66C2F5"))+
                       geom_vline(aes(xintercept=.y$SRMR_M[1],
                                      linetype="misspec_sum$SRMR_M[1]",color="misspec_sum$SRMR_M[1]"),
-                                 size=.6)+
+                                 linewidth=.6)+
                       geom_vline(aes(xintercept=.08,
                                      linetype=".08",color=".08"),
-                                 size=.75)+
+                                 linewidth=.75)+
                       scale_color_manual(name="Cutoff Values",
-                                         labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                         labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                          values=c("misspec_sum$SRMR_M[1]"="black",
                                                   ".08"="black"))+
                       scale_linetype_manual(name="Cutoff Values",
-                                            labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                            labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                             values=c("misspec_sum$SRMR_M[1]"="longdash",
                                                      ".08"="dotted"))+
                       theme(axis.title.y = element_blank(),
@@ -595,16 +699,16 @@ plotlist <- reactive({
                        scale_fill_manual(values=c("#E9798C","#66C2F5"))+
                        geom_vline(aes(xintercept=.y$RMSEA_M[1],
                                       linetype="misspec_sum$RMSEA_M[1]",color="misspec_sum$RMSEA_M[1]"),
-                                  size=.6)+
+                                  linewidth=.6)+
                        geom_vline(aes(xintercept=.06,
                                       linetype=".06",color=".06"),
-                                  size=.75)+
+                                  linewidth=.75)+
                        scale_color_manual(name="Cutoff Values",
-                                          labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                          labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                           values=c("misspec_sum$RMSEA_M[1]"="black",
                                                    ".06"="black"))+
                        scale_linetype_manual(name="Cutoff Values",
-                                             labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                             labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                              values=c("misspec_sum$RMSEA_M[1]"="longdash",
                                                       ".06"="dotted"))+
                        theme(axis.title.y = element_blank(),
@@ -623,16 +727,16 @@ plotlist <- reactive({
                      scale_fill_manual(values=c("#E9798C","#66C2F5"))+
                      geom_vline(aes(xintercept=.y$CFI_M[1],
                                     linetype="misspec_sum$CFI_M[1]",color="misspec_sum$CFI_M[1]"),
-                                size=.6)+
+                                linewidth=.6)+
                      geom_vline(aes(xintercept=.95,
                                     linetype=".95",color=".95"),
-                                size=.75)+
+                                linewidth=.75)+
                      scale_color_manual(name="Cutoff Values",
-                                        labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                        labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                         values=c("misspec_sum$CFI_M[1]"="black",
                                                  ".95"="black"))+
                      scale_linetype_manual(name="Cutoff Values",
-                                           labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
+                                           labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
                                            values=c("misspec_sum$CFI_M[1]"="longdash",
                                                     ".95"="dotted"))+
                      theme(axis.title.y = element_blank(),
@@ -683,67 +787,111 @@ for (i in 1:length(plotlist())) {
 ```
 </div>
 
-### Info
+### Misspecification Info
 
-These are the misspecification(s) that were added to your data generating model.  These misspecifications are additive across levels.  In other words, a level 2 misspecification has the misspecification from level 1 in addition to the misspecification from level 2.  In total, there are F-1 misspecifications, where F is the number of factors in the model. This is a replication of the approach used by Hu & Bentler (1999), applied to the user's model.
+To evaluate model fit, we treat your model as if it were correct and then run 250 simulations to determine what the fit indices would look like for a correctly specified model. Next, we add a series of misspecifications(s) to your model so that we can see what the fit indices would look like if your model was incorrectly specified. The fit index cutoffs that are returned by the app distinguish between a correctly specified model and incorrectly specified model.
+
+Below, you will see the misspecification(s) that were added to your data generating model.  These misspecifications are additive across levels.  In other words, a level 2 misspecification has the misspecification from level 1 in addition to the misspecification from level 2.  In total, there are F-1 misspecifications, where F is the number of factors in the model. This is a replication of the approach used by Hu & Bentler (1999), applied to the user's model.
 
 ```{r}
 renderTable({
   
+  # Just print SRMR, RMSEA, and CFI 
+  misspec <- package_results()$cutoffs[4] |> 
+    dplyr::rename(`Magnitude of Omitted Loading` = Magnitude)
   
-    shiny::validate(
-    shiny::need(length(orthogonal(model()$datapath)) != 0,
-                       "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
-  
-    shiny::validate(
-    shiny::need(modelerror(model()$datapath) != 1,
-                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
-  
-    shiny::validate(
-    shiny::need(missing_plus(model()$datapath)==0,
-                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
-  
-  shiny::validate(
-          shiny::need(tools::file_ext(model()$name) %in% 
-                 c('text','.txt','txt'),
-               "You must enter a text file (.txt)"))
-  
-  shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
-
-  shiny::validate(
-    shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
-  
-  shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
-                "It is impossible to add misspecifications to a just identified model."))
-  
-  shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-  
-  #Return crossloadings that were added
-  m_info <- multi_factor(model()$datapath)
-  
-  #Just simple formatting
-  add <- m_info %>% 
-    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
-    dplyr::select(c) %>% 
-    dplyr::mutate("Magnitude of Omitted Loading"=stringr::str_replace_all(c,"0\\.","."),
-                  "Additional Paths in DGM"=dplyr::row_number(),
-                  "Level"=paste("Level",row_number())) %>% 
-    dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
-    tibble::remove_rownames() %>% 
-    tibble::column_to_rownames(var="Level")
-  
-  add
+  misspec
 },
     digits=3, align='c', rownames = TRUE, width="auto",
     bordered = TRUE)
 ```
 
+### Robust ML
+
+**Why is there no maximum likelihood estimator?**
+
+Robust maximum likelihood (MLR) is often the estimator of choice when continuous data is non-normal. As such, it makes sense that researchers would look for this estimator in the DFI app when calculating their fit index cutoffs. So, why isn't it available?
+
+The short answer is: both maximum likelihood (ML) and MLR estimation return the same cutoff values.  
+
+---
+
+The long answer is: to calculate the cutoffs, we simulate the data using a package called `simstandard` which simulates multivariate normal data from user-inputted standardized loadings using `mvtnorm`. We then fit several models to it using `lavaan`: one of which is correctly specified and several which are misspecified, and then return DFI cutoff values that can distinguish between the two distributions of cutoffs.
+
+Let's use an empirical example to see what happens when we simulate multivariate normal data and then estimate a solution using `MLR`.
+
+We'll use the standardized loadings from the `HolzingerSwineford1939` dataset, and our model will be:
+
+```{r echo = TRUE, eval=FALSE}
+cfa_mod <- "F1 =~ x1 + x2 + x3
+            F2 =~ x4 + x5 + x6
+            F3 =~ x7 + x8 + x9"
+```
+
+We can run a cfa on this using `cfa` from `lavaan`. We then get standardized loadings (we can use `estimator = ML` or `estimator = MLR`; the loadings will be the same). This gives us the following model statement:
+
+```{r echo=TRUE, eval=FALSE}
+standardized_mod <- "F1 =~ .772*x1 + .424*x2 + .581*x3
+                     F2 =~ .852*x4 + .855*x5 + .838*x6
+                     F3 =~ .570*x7 + .723*x8 + .665*x9"
+```
+
+We can then simulate the multivariate normal data using the `simstandard` package with 250 replications, as we do in `dynamic`. We begin by setting a seed for replicability.
+
+```{r echo=TRUE, eval=FALSE}
+set.seed(543)
+dat <- simstandard::sim_standardized(standardized_mod, 
+                                     n = 301*250,
+                                     latent = FALSE,
+                                     errors = FALSE)
+id <- rep(1:301,times=250)
+dat_id <- cbind(id,dat)
+dat_list <- dat_id |>  
+  dplyr::group_by(id) |>  
+  tidyr::nest() |> 
+  as.list()
+```
+
+Next, we create a misspecified model to fit the data:
+
+```{r echo=TRUE, eval=FALSE}
+misspec_mod <- "F1 =~ x1 + x2 + x3 
+                F2 =~ x4 + x5 + x6 + x3
+                F3 =~ x7 + x8 + x9"
+```
+
+We then run 250 cfa models with `estimator = MLR` so that we get back both types of fit indices:
+
+```{r echo=TRUE, eval=FALSE}
+fit_list <- purrr::map(dat_list$data, ~lavaan::cfa(model = misspec_mod, 
+                                                   data = ., 
+                                                   estimator = "MLR"))
+```
+
+
+We extract the `CFI`, `CFI.robust`, `RMSEA`, and `RMSEA.robust` into a dataset and run `colMeans`. 
+
+```{r echo=TRUE, eval=FALSE}
+fit_dat <- purrr::map_dfr(fit_list, 
+                          ~lavaan::fitMeasures(., c("cfi","cfi.robust","rmsea","rmsea.robust")))
+colMeans(fit_dat)
+```
+
+This shows us that the robust versions of each fit index are virtually identical to their counterpart:
+
+```{r}
+c("cfi" = .99461865,
+  "cfi.robust" = .99428165,
+  "rmsea" = .01593336,
+  "rmsea.robust" = .01654442)
+```
+
+---
+
+Thus, because we are simulating multivariate normal data to produce the cutoffs, there is no reason to estimate the model using `MLR` or return `cfi.robust` and `rmsea.robust`. They will be the same because the underlying data that the cutoffs are based on is known to be multivariate normal. 
+
+This is because, e.g., `rmsea.robust` is calculated using the sample-corrected robust RMSEA equation in 
+[Brosseau-Liard, Savalei & Li (2013)](https://www.tandfonline.com/doi/abs/10.1080/00273171.2012.715252?journalCode=hmbr20), which is defined by the authors as "it estimates what the usual uncorrected RMSEA values would have been had the data been normal". Because the data is, in fact, normal, the estimates will be extremely similar.
 
 ### References
 
@@ -782,49 +930,3 @@ Aesthetically, this app relies on the following packages:
 
 This app began as a project in a graduate course taught by [Allison Horst](https://www.allisonhorst.com/){target="_parent"}.
 
-<div>
-```{r progress2, eval=FALSE}
-#Just added because of a shiny bug with the action button
-#Ignore
-
-renderPlot({
-  
-    shiny::validate(
-    shiny::need(length(orthogonal(model()$datapath)) != 0,
-                       "Did you mean to enter an orthogonal model? If so, please manually set orthogonal factors to have a zero correlation in your model statement (e.g., F1 ~~ 0*F2)."))
-  
-    shiny::validate(
-    shiny::need(modelerror(model()$datapath) != 1,
-                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
-  
-    shiny::validate(
-    shiny::need(missing_plus(model()$datapath)==0,
-                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
-  
-  shiny::validate(
-          shiny::need(tools::file_ext(model()$name) %in% 
-                 c('text','.txt','txt'),
-               "You must enter a text file (.txt)"))
-  
-  shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
-
-  shiny::validate(
-    shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
-  
-  shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
-                "It is impossible to add misspecifications to a just identified model."))
-  
-  shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-  
-  invisible(multi_df() %>% 
-    unlist())
-  
-}, width=1,height=1)
-```
-</div>

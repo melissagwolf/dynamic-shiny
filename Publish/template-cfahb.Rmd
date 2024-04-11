@@ -15,7 +15,7 @@ knitr::opts_chunk$set(echo = FALSE)
 Single level multi-factor CFA with continuous outcomes
 
 ```{r}
-plot(model_check)
+plot(model_check1)
 ```
 
 `r if (input$input_type == 2){
